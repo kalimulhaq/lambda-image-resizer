@@ -22,3 +22,6 @@ infra/*.json
 !infra/*.example.json
 dist.json
 dist-body.json
+
+.claude/*.json
+
