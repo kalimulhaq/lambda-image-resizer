@@ -1,4 +1,10 @@
-# lambda-image-resizer
+# Lambda Image Resizer
+
+[![GitHub Stars](https://img.shields.io/github/stars/kalimulhaq/lambda-image-resizer?style=flat-square)](https://github.com/kalimulhaq/lambda-image-resizer/stargazers)
+[![CI](https://github.com/kalimulhaq/lambda-image-resizer/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kalimulhaq/lambda-image-resizer/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.13%2B-3776AB?style=flat-square&logo=python&logoColor=white)](pyproject.toml)
+[![AWS Lambda@Edge](https://img.shields.io/badge/AWS-Lambda%40Edge-FF9900?style=flat-square&logo=amazonaws&logoColor=white)](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/lambda-at-the-edge.html)
+[![License](https://img.shields.io/github/license/kalimulhaq/lambda-image-resizer?style=flat-square)](LICENSE)
 
 A generic, self-hosted on-the-fly image resizing and format-conversion service for any S3 + CloudFront setup, running as a Lambda@Edge `origin-request` function.
 
@@ -106,6 +112,25 @@ mypy src/
 pytest --cov=src
 ```
 
+## Contributing
+
+Please see [CONTRIBUTING](CONTRIBUTING.md) for details.
+
+## Security
+
+If you discover a security issue please email [kalim.dir@gmail.com](mailto:kalim.dir@gmail.com) rather than using the public issue tracker.
+
+## Credits
+
+- [Kalim ul Haq](https://github.com/kalimulhaq)
+- [All Contributors](../../contributors)
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Support
+
+If you find this project useful, consider supporting me on Ko-fi!
+
+[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/kalimulhaq)
