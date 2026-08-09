@@ -1,0 +1,9 @@
+{
+  "_comment": "Add these to your CloudFront distribution's existing S3 origin's CustomHeaders (Origins.Items[N].CustomHeaders). This is how config reaches the Lambda, since Lambda@Edge doesn't support environment variables.",
+  "Quantity": 3,
+  "Items": [
+    { "HeaderName": "X-Img-Bucket", "HeaderValue": "REPLACE_WITH_YOUR_BUCKET_NAME" },
+    { "HeaderName": "X-Img-Resized-Prefix", "HeaderValue": "resized" },
+    { "HeaderName": "X-Img-Quality", "HeaderValue": "82" }
+  ]
+}

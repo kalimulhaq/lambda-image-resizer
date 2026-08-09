@@ -1,0 +1,6 @@
+{
+  "_comment": "Add this to your CloudFront distribution's default (or other) cache behavior's LambdaFunctionAssociations. LambdaFunctionARN must be a specific published version (e.g. ...:function:lambda-image-resizer:3), never $LATEST.",
+  "EventType": "origin-request",
+  "LambdaFunctionARN": "arn:aws:lambda:us-east-1:REPLACE_WITH_ACCOUNT_ID:function:lambda-image-resizer:REPLACE_WITH_VERSION",
+  "IncludeBody": false
+}

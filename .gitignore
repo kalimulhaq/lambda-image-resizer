@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# packaging artifacts
+package/
+function.zip
+
+# local venvs
+.venv/
+venv/
+
+# local AWS config scratch (never commit real IAM/cache-policy files with account-specific values)
+infra/*.json
+!infra/*.example.json
+dist.json
+dist-body.json

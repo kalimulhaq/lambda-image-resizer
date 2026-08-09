@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dev dependencies (for pre-release test run)
+        run: pip install -e ".[dev]"
+
+      - name: Test before packaging
+        run: pytest
+
+      - name: Build deployment package
+        run: ./scripts/build.sh
+
+      - name: Attach function.zip to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: function.zip
+          generate_release_notes: true

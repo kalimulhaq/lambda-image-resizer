@@ -1,0 +1,17 @@
+{
+  "Name": "lambda-image-resizer-cache",
+  "Comment": "Cache key = URL path + w/h/f query params only, for the lambda-image-resizer origin-request Lambda@Edge function",
+  "DefaultTTL": 86400,
+  "MaxTTL": 31536000,
+  "MinTTL": 1,
+  "ParametersInCacheKeyAndForwardedToOrigin": {
+    "EnableAcceptEncodingGzip": true,
+    "EnableAcceptEncodingBrotli": true,
+    "HeadersConfig": { "HeaderBehavior": "none" },
+    "CookiesConfig": { "CookieBehavior": "none" },
+    "QueryStringsConfig": {
+      "QueryStringBehavior": "whitelist",
+      "QueryStrings": { "Quantity": 3, "Items": ["w", "h", "f"] }
+    }
+  }
+}
