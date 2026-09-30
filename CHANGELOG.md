@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-09-30
 
 ### Added
 - `Cache-Control` on every derivative (default `public, max-age=31536000, immutable`, configurable via `X-Img-Cache-Control`).
@@ -10,7 +10,7 @@ All notable changes to this project are documented in this file.
 - `X-Img-Allowed-Sizes` origin header: snaps requested sizes to a fixed list to cap how many derivatives can exist.
 - `infra/response-headers-policy.example.json`: security headers, fallback `Cache-Control`, and removal of `Server`/`x-amz-*` headers.
 - `MEMORY_SIZE` / `TIMEOUT` overrides in `scripts/deploy.sh`.
-- Releases now ship a `function.zip.sha256` checksum, use this CHANGELOG's section as their notes, and fail if the tag doesn't match the package version.
+- Releases now ship a `function.zip.sha256` checksum, use this CHANGELOG's section as their notes, and fail if the tag doesn't match the package version. The README explains how to download, verify and deploy a release without cloning or building.
 
 ### Changed
 - Large JPEGs are decoded at reduced scale (libjpeg draft mode), and resizing uses a fast integer pre-reduction — much faster on big photos.
@@ -34,7 +34,15 @@ All notable changes to this project are documented in this file.
 - Derivatives are never used as sources (no derivative-of-derivative chains).
 - EXIF metadata (including GPS) is stripped from derivatives.
 
-## [0.1.0] - Unreleased
+### Upgrading
+- Deploy the new `function.zip`, publish a version, and point your CloudFront association at it. No configuration changes are required.
+- Optional: apply the tighter `infra/s3-policy.example.json`, turn off the `Accept-Encoding` settings in your cache policy, and attach `infra/response-headers-policy.example.json`.
+- Derivatives created before this release have no `Cache-Control` and use the old encoder settings. To regenerate them, delete the `resized/` prefix and invalidate `/*`.
+
+### Other
+- The README was reorganised and a CONTRIBUTING guide added. There's also a pull request template, and local Claude Code files are now ignored.
+
+## [0.1.0] - Not released
 
 ### Added
 - Initial release: Lambda@Edge `origin-request` image resizer/format-converter backed by Pillow.
