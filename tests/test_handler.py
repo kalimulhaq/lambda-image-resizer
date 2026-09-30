@@ -11,7 +11,14 @@ from lambda_image_resizer.handler import handler
 BUCKET = "test-bucket"
 
 
-def make_event(uri: str, querystring: str = "") -> dict:
+def make_event(uri: str, querystring: str = "", extra_headers: dict | None = None) -> dict:
+    custom_headers = {
+        "x-img-bucket": [{"key": "X-Img-Bucket", "value": BUCKET}],
+        "x-img-resized-prefix": [{"key": "X-Img-Resized-Prefix", "value": "resized"}],
+        "x-img-quality": [{"key": "X-Img-Quality", "value": "82"}],
+    }
+    for name, value in (extra_headers or {}).items():
+        custom_headers[name.lower()] = [{"key": name, "value": value}]
     return {
         "Records": [
             {
@@ -23,13 +30,8 @@ def make_event(uri: str, querystring: str = "") -> dict:
                         "origin": {
                             "s3": {
                                 "domainName": f"{BUCKET}.s3.amazonaws.com",
-                                "customHeaders": {
-                                    "x-img-bucket": [{"key": "X-Img-Bucket", "value": BUCKET}],
-                                    "x-img-resized-prefix": [
-                                        {"key": "X-Img-Resized-Prefix", "value": "resized"}
-                                    ],
-                                    "x-img-quality": [{"key": "X-Img-Quality", "value": "82"}],
-                                },
+                                "region": "us-east-1",
+                                "customHeaders": custom_headers,
                             }
                         },
                     }
@@ -206,3 +208,90 @@ class TestParseQuerystringEdgeCases:
         result = handler_module._parse_querystring("=orphan&w=400")
         assert result == {"w": "400"}
         assert "" not in result
+
+
+class TestHandlerHardening:
+    def test_percent_encoded_uri_is_decoded_for_s3_and_reencoded(self, s3_bucket):
+        s3_bucket.put_object(
+            Bucket=BUCKET, Key="uploads/my photo é.png", Body=make_image_bytes(1000, 500)
+        )
+        result = handler(make_event("/uploads/my%20photo%20%C3%A9.png", "w=400"), None)
+        assert result["uri"] == "/resized/w400/orig/uploads/my%20photo%20%C3%A9.png"
+        s3_bucket.head_object(Bucket=BUCKET, Key="resized/w400/orig/uploads/my photo é.png")
+
+    def test_query_string_cleared_after_rewrite(self, s3_bucket):
+        s3_bucket.put_object(Bucket=BUCKET, Key="uploads/pro-01.png", Body=make_image_bytes())
+        result = handler(make_event("/uploads/pro-01.png", "w=400&f=webp"), None)
+        assert result["querystring"] == ""
+
+    def test_derivative_has_cache_control(self, s3_bucket):
+        s3_bucket.put_object(Bucket=BUCKET, Key="uploads/pro-01.png", Body=make_image_bytes())
+        handler(make_event("/uploads/pro-01.png", "w=400"), None)
+        head = s3_bucket.head_object(Bucket=BUCKET, Key="resized/w400/orig/uploads/pro-01.png")
+        assert head["CacheControl"] == "public, max-age=31536000, immutable"
+
+    def test_existing_derivative_is_never_resized_again(self, s3_bucket):
+        key = "resized/w400/orig/uploads/pro-01.png"
+        s3_bucket.put_object(Bucket=BUCKET, Key=key, Body=make_image_bytes(400, 200))
+        result = handler(make_event("/" + key, "w=100"), None)
+        assert result["uri"] == "/" + key
+        assert result["querystring"] == "w=100"
+
+    def test_allowed_sizes_snap_the_derivative_key(self, s3_bucket):
+        s3_bucket.put_object(Bucket=BUCKET, Key="uploads/pro-01.png", Body=make_image_bytes())
+        event = make_event("/uploads/pro-01.png", "w=500", {"X-Img-Allowed-Sizes": "320,640,1280"})
+        assert handler(event, None)["uri"] == "/resized/w640/orig/uploads/pro-01.png"
+
+    def test_oversized_original_passes_through(self, s3_bucket, monkeypatch):
+        monkeypatch.setattr(handler_module, "MAX_SOURCE_BYTES", 10)
+        s3_bucket.put_object(Bucket=BUCKET, Key="uploads/pro-01.png", Body=make_image_bytes())
+        result = handler(make_event("/uploads/pro-01.png", "w=400"), None)
+        assert result["uri"] == "/uploads/pro-01.png"
+
+    def test_bucket_region_passed_to_storage(self, s3_bucket, monkeypatch):
+        seen = []
+
+        def fake_exists(bucket, key, region=None):
+            seen.append(region)
+            return True
+
+        monkeypatch.setattr(handler_module.storage, "derivative_exists", fake_exists)
+        handler(make_event("/uploads/pro-01.png", "w=400"), None)
+        assert seen == ["us-east-1"]
+
+    def test_url_encoded_query_value(self, s3_bucket):
+        s3_bucket.put_object(Bucket=BUCKET, Key="uploads/pro-01.png", Body=make_image_bytes())
+        result = handler(make_event("/uploads/pro-01.png", "f=%57EBP"), None)
+        assert result["uri"] == "/resized/orig/webp/uploads/pro-01.png"
+
+
+class TestHandlerLegacyDimensionParam:
+    def test_d_param_maps_to_width_and_height(self, s3_bucket):
+        s3_bucket.put_object(
+            Bucket=BUCKET, Key="uploads/pro-01.jpg", Body=make_image_bytes(2000, 1000, "JPEG")
+        )
+        result = handler(make_event("/uploads/pro-01.jpg", "f=webp&d=1000x666"), None)
+        assert result["uri"] == "/resized/w1000h666/webp/uploads/pro-01.jpg"
+        derivative = s3_bucket.get_object(
+            Bucket=BUCKET, Key="resized/w1000h666/webp/uploads/pro-01.jpg"
+        )
+        assert Image.open(BytesIO(derivative["Body"].read())).size == (1000, 500)
+
+    def test_d_param_width_or_height_only(self, s3_bucket):
+        s3_bucket.put_object(Bucket=BUCKET, Key="uploads/pro-01.png", Body=make_image_bytes())
+        assert handler(make_event("/uploads/pro-01.png", "d=400x"), None)["uri"] == (
+            "/resized/w400/orig/uploads/pro-01.png"
+        )
+        assert handler(make_event("/uploads/pro-01.png", "d=X250"), None)["uri"] == (
+            "/resized/h250/orig/uploads/pro-01.png"
+        )
+
+    def test_explicit_w_h_take_precedence_over_d(self, s3_bucket):
+        s3_bucket.put_object(Bucket=BUCKET, Key="uploads/pro-01.png", Body=make_image_bytes())
+        result = handler(make_event("/uploads/pro-01.png", "w=300&d=1000x666"), None)
+        assert result["uri"] == "/resized/w300/orig/uploads/pro-01.png"
+
+    def test_malformed_d_passes_through(self, s3_bucket):
+        s3_bucket.put_object(Bucket=BUCKET, Key="uploads/pro-01.png", Body=make_image_bytes())
+        result = handler(make_event("/uploads/pro-01.png", "d=bogus"), None)
+        assert result["uri"] == "/uploads/pro-01.png"

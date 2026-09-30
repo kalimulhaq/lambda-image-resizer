@@ -35,3 +35,11 @@ def derivative_key(
     clean_prefix = prefix.strip("/")
     clean_key = original_key.lstrip("/")
     return f"{clean_prefix}/{dim_token}/{fmt_token}/{clean_key}"
+
+
+def is_derivative_key(key: str, prefix: str) -> bool:
+    """Whether `key` lives under the derivatives prefix — i.e. is itself an
+    output of this service and must never be fed back in as a source.
+    """
+    clean_prefix = prefix.strip("/")
+    return key.lstrip("/").startswith(clean_prefix + "/")

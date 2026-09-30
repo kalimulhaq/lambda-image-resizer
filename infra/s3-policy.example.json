@@ -2,13 +2,19 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ImageResizerObjectAccess",
+      "Sid": "ImageResizerReadOriginals",
       "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject"],
+      "Action": "s3:GetObject",
       "Resource": "arn:aws:s3:::REPLACE_WITH_YOUR_BUCKET_NAME/*"
     },
     {
-      "Sid": "ImageResizerListBucket",
+      "Sid": "ImageResizerWriteDerivativesOnly",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::REPLACE_WITH_YOUR_BUCKET_NAME/resized/*"
+    },
+    {
+      "Sid": "ImageResizerListBucketSoMissingKeysReturn404",
       "Effect": "Allow",
       "Action": "s3:ListBucket",
       "Resource": "arn:aws:s3:::REPLACE_WITH_YOUR_BUCKET_NAME"

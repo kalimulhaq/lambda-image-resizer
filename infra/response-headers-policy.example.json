@@ -1,0 +1,34 @@
+{
+  "_comment": "ResponseHeadersPolicyConfig for `aws cloudfront create-response-headers-policy`. Attach it to the same cache behavior as the Lambda. Adds security headers, a fallback Cache-Control for objects that have none (originals, and derivatives written before v0.2.0 — derivatives written since carry their own), and strips headers that only leak origin details. Remove the _comment key before use.",
+  "Name": "lambda-image-resizer-headers",
+  "Comment": "Security + caching headers for images served via lambda-image-resizer",
+  "SecurityHeadersConfig": {
+    "ContentTypeOptions": { "Override": true },
+    "StrictTransportSecurity": {
+      "Override": true,
+      "AccessControlMaxAgeSec": 63072000,
+      "IncludeSubdomains": true,
+      "Preload": false
+    },
+    "ReferrerPolicy": {
+      "Override": true,
+      "ReferrerPolicy": "strict-origin-when-cross-origin"
+    }
+  },
+  "CustomHeadersConfig": {
+    "Quantity": 3,
+    "Items": [
+      { "Header": "Cross-Origin-Resource-Policy", "Value": "cross-origin", "Override": true },
+      { "Header": "Timing-Allow-Origin", "Value": "*", "Override": true },
+      { "Header": "Cache-Control", "Value": "public, max-age=86400", "Override": false }
+    ]
+  },
+  "RemoveHeadersConfig": {
+    "Quantity": 3,
+    "Items": [
+      { "Header": "Server" },
+      { "Header": "x-amz-server-side-encryption" },
+      { "Header": "x-amz-version-id" }
+    ]
+  }
+}

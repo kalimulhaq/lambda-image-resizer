@@ -1,12 +1,12 @@
 {
   "Name": "lambda-image-resizer-cache",
-  "Comment": "Cache key = URL path + w/h/f query params only, for the lambda-image-resizer origin-request Lambda@Edge function",
+  "Comment": "Cache key = URL path + w/h/f query params only. Accept-Encoding is deliberately excluded: images aren't compressible, and including it would split each image into up to 3 cache entries. Only enable it if this behavior also serves text assets.",
   "DefaultTTL": 86400,
   "MaxTTL": 31536000,
-  "MinTTL": 1,
+  "MinTTL": 0,
   "ParametersInCacheKeyAndForwardedToOrigin": {
-    "EnableAcceptEncodingGzip": true,
-    "EnableAcceptEncodingBrotli": true,
+    "EnableAcceptEncodingGzip": false,
+    "EnableAcceptEncodingBrotli": false,
     "HeadersConfig": { "HeaderBehavior": "none" },
     "CookiesConfig": { "CookieBehavior": "none" },
     "QueryStringsConfig": {

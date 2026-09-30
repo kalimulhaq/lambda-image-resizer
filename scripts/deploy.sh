@@ -8,6 +8,9 @@
 #   ROLE_ARN        - the execution role's ARN (see infra/trust-policy.example.json
 #                      and infra/s3-policy.example.json)
 #   AWS_PROFILE     - optional, defaults to your default profile
+#   MEMORY_SIZE     - optional, MB, defaults to 1024 (Lambda CPU scales with
+#                      memory, so this roughly halves resize time vs 512)
+#   TIMEOUT         - optional, seconds, defaults to 30 (the origin-request max)
 #
 # Usage:
 #   ./scripts/build.sh
@@ -28,13 +31,22 @@ fi
 # Lambda@Edge functions MUST be created/updated in us-east-1, regardless of
 # where they'll eventually run at edge locations.
 REGION="us-east-1"
+MEMORY_SIZE="${MEMORY_SIZE:-1024}"
+TIMEOUT="${TIMEOUT:-30}"
 
 if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$REGION" >/dev/null 2>&1; then
   echo "Updating existing function $FUNCTION_NAME..."
   aws lambda update-function-code \
     --function-name "$FUNCTION_NAME" \
     --zip-file fileb://function.zip \
-    --region "$REGION"
+    --region "$REGION" >/dev/null
+  aws lambda wait function-updated-v2 --function-name "$FUNCTION_NAME" --region "$REGION"
+  aws lambda update-function-configuration \
+    --function-name "$FUNCTION_NAME" \
+    --timeout "$TIMEOUT" \
+    --memory-size "$MEMORY_SIZE" \
+    --region "$REGION" >/dev/null
+  aws lambda wait function-updated-v2 --function-name "$FUNCTION_NAME" --region "$REGION"
 else
   echo "Creating function $FUNCTION_NAME..."
   aws lambda create-function \
@@ -43,9 +55,10 @@ else
     --handler lambda_image_resizer.handler.handler \
     --role "$ROLE_ARN" \
     --zip-file fileb://function.zip \
-    --timeout 30 \
-    --memory-size 512 \
-    --region "$REGION"
+    --timeout "$TIMEOUT" \
+    --memory-size "$MEMORY_SIZE" \
+    --region "$REGION" >/dev/null
+  aws lambda wait function-active-v2 --function-name "$FUNCTION_NAME" --region "$REGION"
 fi
 
 echo "Publishing new version..."

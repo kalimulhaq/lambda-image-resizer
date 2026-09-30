@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lambda-image-resizer"
-version = "0.1.0"
+version = "0.2.0"
 description = "Generic Lambda@Edge origin-request image resizer/format-converter for CloudFront + S3, backed by Pillow."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -12,7 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "Kalim" }]
 dependencies = [
     "boto3>=1.34",
-    "Pillow>=10.4",
+    "Pillow>=12.0",
 ]
 
 [project.optional-dependencies]

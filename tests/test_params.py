@@ -26,7 +26,7 @@ class TestParseDimension:
         assert parse_dimension("0") is None
 
     def test_clamped_to_max(self):
-        assert parse_dimension("999999") == 2400
+        assert parse_dimension("999999") == 4096
 
     def test_clamped_to_min(self):
         assert parse_dimension("1") == 16
@@ -88,3 +88,27 @@ class TestIsResizableSource:
 
     def test_uppercase_extension_allowed(self):
         assert is_resizable_source("uploads/PHOTO.PNG") is True
+
+
+class TestParseDimensionLimits:
+    def test_custom_max(self):
+        assert parse_dimension("5000", max_dimension=2560) == 2560
+
+    def test_absurdly_long_value_clamps_instead_of_failing(self):
+        assert parse_dimension("9" * 5000) == 4096
+
+    def test_leading_zeros(self):
+        assert parse_dimension("0500") == 500
+        assert parse_dimension("0000") is None
+
+    def test_unicode_digits_rejected(self):
+        assert parse_dimension("²") is None
+
+    def test_snaps_up_to_allowed_size(self):
+        sizes = (320, 640, 1280)
+        assert parse_dimension("500", allowed_sizes=sizes) == 640
+        assert parse_dimension("640", allowed_sizes=sizes) == 640
+        assert parse_dimension("20", allowed_sizes=sizes) == 320
+
+    def test_above_largest_allowed_size_uses_largest(self):
+        assert parse_dimension("3000", allowed_sizes=(320, 640)) == 640

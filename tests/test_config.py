@@ -64,3 +64,45 @@ class TestOriginConfig:
         headers = {"x-img-bucket": ["not-a-dict"]}
         with pytest.raises(ConfigError):
             OriginConfig.from_custom_headers(headers)
+
+
+class TestOriginConfigLimitsAndHeaders:
+    def test_defaults(self):
+        config = OriginConfig.from_custom_headers(cf_headers(**{"x-img-bucket": "b"}))
+        assert config.max_dimension == 4096
+        assert config.allowed_sizes is None
+        assert config.cache_control == "public, max-age=31536000, immutable"
+
+    def test_custom_max_dimension(self):
+        headers = cf_headers(**{"x-img-bucket": "b", "x-img-max-dimension": "2560"})
+        assert OriginConfig.from_custom_headers(headers).max_dimension == 2560
+
+    def test_max_dimension_above_hard_ceiling_raises(self):
+        headers = cf_headers(**{"x-img-bucket": "b", "x-img-max-dimension": "100000"})
+        with pytest.raises(ConfigError):
+            OriginConfig.from_custom_headers(headers)
+
+    def test_allowed_sizes_parsed_sorted_and_deduplicated(self):
+        headers = cf_headers(**{"x-img-bucket": "b", "x-img-allowed-sizes": "1280, 320,640,320"})
+        assert OriginConfig.from_custom_headers(headers).allowed_sizes == (320, 640, 1280)
+
+    def test_allowed_sizes_above_max_raises(self):
+        headers = cf_headers(
+            **{"x-img-bucket": "b", "x-img-max-dimension": "1000", "x-img-allowed-sizes": "2000"}
+        )
+        with pytest.raises(ConfigError):
+            OriginConfig.from_custom_headers(headers)
+
+    def test_allowed_sizes_garbage_raises(self):
+        headers = cf_headers(**{"x-img-bucket": "b", "x-img-allowed-sizes": "small,large"})
+        with pytest.raises(ConfigError):
+            OriginConfig.from_custom_headers(headers)
+
+    def test_custom_cache_control(self):
+        headers = cf_headers(**{"x-img-bucket": "b", "x-img-cache-control": "public, max-age=60"})
+        assert OriginConfig.from_custom_headers(headers).cache_control == "public, max-age=60"
+
+    def test_empty_prefix_raises(self):
+        headers = cf_headers(**{"x-img-bucket": "b", "x-img-resized-prefix": "/"})
+        with pytest.raises(ConfigError):
+            OriginConfig.from_custom_headers(headers)

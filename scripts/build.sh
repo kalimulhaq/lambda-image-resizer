@@ -25,7 +25,7 @@ pip install \
   --python-version "$PYTHON_VERSION" \
   --only-binary=:all: \
   --upgrade \
-  Pillow
+  "Pillow>=12.0"
 
 cp -r src/lambda_image_resizer "$BUILD_DIR/"
 
