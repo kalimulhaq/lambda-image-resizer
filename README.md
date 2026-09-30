@@ -24,16 +24,41 @@ This project takes a different approach: on `origin-request`, the Lambda checks 
 
 This is how you can deploy to your own AWS account.
 
-1. **Needs**: an existing S3+CloudFront setup, AWS CLI access, Python 3.13+pip.
-2. **Build**: `./scripts/build.sh` — packages Pillow (fetched as a Lambda-compatible prebuilt wheel, no Docker needed) and the handler into `function.zip`.
-3. **IAM**: create an execution role using `infra/trust-policy.example.json` (note it must trust *both* `lambda.amazonaws.com` and `edgelambda.amazonaws.com` — a Lambda@Edge-specific requirement) and `infra/s3-policy.example.json` (fill in your bucket name).
+1. **Needs**: an existing S3+CloudFront setup and AWS CLI access. Python 3.13 + pip only if you build it yourself.
+2. **Get `function.zip`** — either option gives the same package; nothing in it is specific to your account, since all configuration comes from CloudFront headers (see [How it's configured](#how-its-configured)).
+   - **Download a release (no build needed)**: grab `function.zip` and `function.zip.sha256` from the [latest release](https://github.com/kalimulhaq/lambda-image-resizer/releases/latest), and verify it:
+     ```bash
+     curl -LO https://github.com/kalimulhaq/lambda-image-resizer/releases/latest/download/function.zip
+     curl -LO https://github.com/kalimulhaq/lambda-image-resizer/releases/latest/download/function.zip.sha256
+     sha256sum -c function.zip.sha256
+     ```
+     To pin a version, replace `latest/download` with `download/v0.2.0` (or any other tag).
+   - **Or build it yourself**: clone the repo and run `./scripts/build.sh` — packages Pillow (fetched as a Lambda-compatible prebuilt wheel, no Docker needed) and the handler into `function.zip`.
+3. **IAM**: create an execution role using [`infra/trust-policy.example.json`](infra/trust-policy.example.json) (note it must trust *both* `lambda.amazonaws.com` and `edgelambda.amazonaws.com` — a Lambda@Edge-specific requirement) and [`infra/s3-policy.example.json`](infra/s3-policy.example.json) (fill in your bucket name).
    The S3 policy only lets the function write under `resized/*` — if you change `X-Img-Resized-Prefix`, change that resource too.
-4. **Deploy**: `FUNCTION_NAME=lambda-image-resizer ROLE_ARN=<your-role-arn> ./scripts/deploy.sh` — creates/updates the function **in `us-east-1`** (required for Lambda@Edge regardless of your bucket's region) and publishes a version (runs on `python3.13`, 30s timeout, 1024MB memory — override with `TIMEOUT=` / `MEMORY_SIZE=`). Lambda CPU scales with memory, so 1024MB resizes roughly twice as fast as 512MB for about the same cost.
+4. **Deploy** the function **in `us-east-1`** (required for Lambda@Edge regardless of your bucket's region) and publish a version. It runs on `python3.13` (x86_64 — Lambda@Edge has no arm64), with a 30s timeout and 1024MB memory. Lambda CPU scales with memory, so 1024MB resizes roughly twice as fast as 512MB for about the same cost.
+   - **With a clone of the repo**: `FUNCTION_NAME=lambda-image-resizer ROLE_ARN=<your-role-arn> ./scripts/deploy.sh` — creates or updates the function and publishes a version (override with `TIMEOUT=` / `MEMORY_SIZE=`).
+   - **With only the downloaded zip**, first deploy:
+     ```bash
+     aws lambda create-function --region us-east-1 \
+       --function-name lambda-image-resizer --runtime python3.13 --architectures x86_64 \
+       --handler lambda_image_resizer.handler.handler --role <your-role-arn> \
+       --zip-file fileb://function.zip --timeout 30 --memory-size 1024
+     aws lambda wait function-active-v2 --region us-east-1 --function-name lambda-image-resizer
+     aws lambda publish-version --region us-east-1 --function-name lambda-image-resizer --query FunctionArn --output text
+     ```
+     To upgrade later, download the new release and run:
+     ```bash
+     aws lambda update-function-code --region us-east-1 --function-name lambda-image-resizer --zip-file fileb://function.zip
+     aws lambda wait function-updated-v2 --region us-east-1 --function-name lambda-image-resizer
+     aws lambda publish-version --region us-east-1 --function-name lambda-image-resizer --query FunctionArn --output text
+     ```
+     then point your CloudFront association at the new version ARN (step 5), and read that release's notes for any other upgrade steps.
 5. **Wire into CloudFront**:
-   - Add the three `X-Img-*` custom headers to your existing S3 origin (`infra/origin-custom-headers.example.json`).
-   - Add the published version's ARN as an `origin-request` Lambda association on your cache behavior (`infra/lambda-function-association.example.json`).
-   - Create a cache policy that forwards `w`/`h`/`f` as part of the cache key (`infra/cache-policy.example.json`) and assign it to that behavior — the default `CachingOptimized` managed policy forwards zero query strings, which would make every `w`/`h`/`f` combination collapse onto one cache entry.
-   - Create a response headers policy (`infra/response-headers-policy.example.json`) and assign it to that behavior — see [Response headers](#response-headers).
+   - Add the `X-Img-*` custom headers to your existing S3 origin ([`infra/origin-custom-headers.example.json`](infra/origin-custom-headers.example.json)) — only `X-Img-Bucket` is required.
+   - Add the published version's ARN as an `origin-request` Lambda association on your cache behavior ([`infra/lambda-function-association.example.json`](infra/lambda-function-association.example.json)).
+   - Create a cache policy that forwards `w`/`h`/`f` as part of the cache key ([`infra/cache-policy.example.json`](infra/cache-policy.example.json)) and assign it to that behavior — the default `CachingOptimized` managed policy forwards zero query strings, which would make every `w`/`h`/`f` combination collapse onto one cache entry.
+   - Create a response headers policy ([`infra/response-headers-policy.example.json`](infra/response-headers-policy.example.json)) and assign it to that behavior — see [Response headers](#response-headers).
    - Recommended: enable [Origin Shield](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/origin-shield.html) on the S3 origin, in the region closest to your bucket. The origin-request Lambda runs at the regional edge caches, so Origin Shield collapses requests from all of them into one — fewer Lambda invocations and more cache hits.
 6. **Wait**: Lambda@Edge association changes propagate to edge locations over several minutes (often 15–30+) — longer than a typical CloudFront config change.
 

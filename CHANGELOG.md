@@ -10,6 +10,7 @@ All notable changes to this project are documented in this file.
 - `X-Img-Allowed-Sizes` origin header: snaps requested sizes to a fixed list to cap how many derivatives can exist.
 - `infra/response-headers-policy.example.json`: security headers, fallback `Cache-Control`, and removal of `Server`/`x-amz-*` headers.
 - `MEMORY_SIZE` / `TIMEOUT` overrides in `scripts/deploy.sh`.
+- Releases now ship a `function.zip.sha256` checksum, use this CHANGELOG's section as their notes, and fail if the tag doesn't match the package version.
 
 ### Changed
 - Large JPEGs are decoded at reduced scale (libjpeg draft mode), and resizing uses a fast integer pre-reduction — much faster on big photos.
