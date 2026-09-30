@@ -23,5 +23,6 @@ infra/*.json
 dist.json
 dist-body.json
 
-.claude/*.json
+# ignore claude artificts
+.claude/
 
