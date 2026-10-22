@@ -30,16 +30,28 @@ class TestDerivativeKey:
         key = derivative_key("uploads/x.png", "/resized/", 500, None, "webp")
         assert key == "resized/w500/webp/uploads/x.png"
 
+    def test_crop_has_its_own_token(self):
+        key = derivative_key("uploads/x.png", "resized", 520, 400, "webp", crop=True)
+        assert key == "resized/w520h400c/webp/uploads/x.png"
+
+    def test_crop_defaults_to_off(self):
+        key = derivative_key("uploads/x.png", "resized", 520, 400, "webp", crop=False)
+        assert key == "resized/w520h400/webp/uploads/x.png"
+
     def test_never_collides_across_combinations(self):
         combos = [
-            (500, 333, "webp"),
-            (500, None, "webp"),
-            (None, 333, "webp"),
-            (None, None, "webp"),
-            (500, 333, None),
-            (500, 333, "png"),
+            (500, 333, "webp", False),
+            (500, 333, "webp", True),
+            (500, None, "webp", False),
+            (None, 333, "webp", False),
+            (None, None, "webp", False),
+            (500, 333, None, False),
+            (500, 333, None, True),
+            (500, 333, "png", False),
         ]
-        keys = {derivative_key("uploads/x.png", "resized", w, h, f) for (w, h, f) in combos}
+        keys = {
+            derivative_key("uploads/x.png", "resized", w, h, f, crop=c) for (w, h, f, c) in combos
+        }
         assert len(keys) == len(combos)
 
 

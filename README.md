@@ -12,7 +12,7 @@ A generic, self-hosted on-the-fly image resizing and format-conversion service f
 https://your-cdn.example.com/uploads/products/photo.jpg?w=500&h=333&f=webp
 ```
 
-fits the image inside a 500×333 box (preserving aspect ratio, never cropping, never distorting, never upscaling past the source resolution), converts it to WebP, and caches the result at the CloudFront edge — indefinitely, since a given `(key, w, h, f)` combination always produces the same output.
+fits the image inside a 500×333 box (preserving aspect ratio — by default it never crops, distorts or upscales past the source resolution), converts it to WebP, and caches the result at the CloudFront edge — indefinitely, since a given `(key, w, h, f, crop)` combination always produces the same output.
 
 ## Why this exists
 
@@ -25,18 +25,22 @@ This project takes a different approach: on `origin-request`, the Lambda checks 
 This is how you can deploy to your own AWS account.
 
 1. **Needs**: an existing S3+CloudFront setup and AWS CLI access. Python 3.13 + pip only if you build it yourself.
-2. **Get `function.zip`** — either option gives the same package; nothing in it is specific to your account, since all configuration comes from CloudFront headers (see [How it's configured](#how-its-configured)).
-   - **Download a release (no build needed)**: grab `function.zip` and `function.zip.sha256` from the [latest release](https://github.com/kalimulhaq/lambda-image-resizer/releases/latest), and verify it:
+2. **Get a zip** — there are two variants, and nothing in either is specific to your account, since all configuration comes from CloudFront headers (see [How it's configured](#how-its-configured)):
+   - `function.zip` — JPEG, PNG, GIF, WebP, AVIF, TIFF and BMP. Pillow and its bundled libraries only.
+   - `function-full.zip` — everything above plus JPEG XL and HEIC (iPhone photos). It bundles GPL-licensed components, so read [Licensing](#licensing) first.
+
+   Get either one as a release download or by building it yourself:
+   - **Download a release (no build needed)**: grab the zip you want and its `.sha256` file from the [latest release](https://github.com/kalimulhaq/lambda-image-resizer/releases/latest), and verify it (shown for `function.zip`; use `function-full.zip` for the full variant):
      ```bash
      curl -LO https://github.com/kalimulhaq/lambda-image-resizer/releases/latest/download/function.zip
      curl -LO https://github.com/kalimulhaq/lambda-image-resizer/releases/latest/download/function.zip.sha256
      sha256sum -c function.zip.sha256
      ```
      To pin a version, replace `latest/download` with `download/v0.2.0` (or any other tag).
-   - **Or build it yourself**: clone the repo and run `./scripts/build.sh` — packages Pillow (fetched as a Lambda-compatible prebuilt wheel, no Docker needed) and the handler into `function.zip`.
+   - **Or build it yourself**: clone the repo and run `./scripts/build.sh` for `function.zip`, or `./scripts/build.sh --full` for `function-full.zip`. It packages Pillow (and, for `--full`, the JPEG XL and HEIC plugins), fetched as Lambda-compatible prebuilt wheels with no Docker needed, plus the handler.
 3. **IAM**: create an execution role using [`infra/trust-policy.example.json`](infra/trust-policy.example.json) (note it must trust *both* `lambda.amazonaws.com` and `edgelambda.amazonaws.com` — a Lambda@Edge-specific requirement) and [`infra/s3-policy.example.json`](infra/s3-policy.example.json) (fill in your bucket name).
    The S3 policy only lets the function write under `resized/*` — if you change `X-Img-Resized-Prefix`, change that resource too.
-4. **Deploy** the function **in `us-east-1`** (required for Lambda@Edge regardless of your bucket's region) and publish a version. It runs on `python3.13` (x86_64 — Lambda@Edge has no arm64), with a 30s timeout and 1024MB memory. Lambda CPU scales with memory, so 1024MB resizes roughly twice as fast as 512MB for about the same cost.
+4. **Deploy** (using `function-full.zip` instead of `function.zip` if you chose the full variant — `ZIP_FILE=function-full.zip` for `deploy.sh`) the function **in `us-east-1`** (required for Lambda@Edge regardless of your bucket's region) and publish a version. It runs on `python3.13` (x86_64 — Lambda@Edge has no arm64), with a 30s timeout and 1024MB memory. Lambda CPU scales with memory, so 1024MB resizes roughly twice as fast as 512MB for about the same cost.
    - **With a clone of the repo**: `FUNCTION_NAME=lambda-image-resizer ROLE_ARN=<your-role-arn> ./scripts/deploy.sh` — creates or updates the function and publishes a version (override with `TIMEOUT=` / `MEMORY_SIZE=`).
    - **With only the downloaded zip**, first deploy:
      ```bash
@@ -57,7 +61,7 @@ This is how you can deploy to your own AWS account.
 5. **Wire into CloudFront**:
    - Add the `X-Img-*` custom headers to your existing S3 origin ([`infra/origin-custom-headers.example.json`](infra/origin-custom-headers.example.json)) — only `X-Img-Bucket` is required.
    - Add the published version's ARN as an `origin-request` Lambda association on your cache behavior ([`infra/lambda-function-association.example.json`](infra/lambda-function-association.example.json)).
-   - Create a cache policy that forwards `w`/`h`/`f` as part of the cache key ([`infra/cache-policy.example.json`](infra/cache-policy.example.json)) and assign it to that behavior — the default `CachingOptimized` managed policy forwards zero query strings, which would make every `w`/`h`/`f` combination collapse onto one cache entry.
+   - Create a cache policy that forwards `w`/`h`/`d`/`crop`/`f` as part of the cache key ([`infra/cache-policy.example.json`](infra/cache-policy.example.json)) and assign it to that behavior — the default `CachingOptimized` managed policy forwards zero query strings, which would make every combination collapse onto one cache entry. Leaving out `d` or `crop` has the same effect for those parameters: a cropped and an uncropped request would be served from one cache entry.
    - Create a response headers policy ([`infra/response-headers-policy.example.json`](infra/response-headers-policy.example.json)) and assign it to that behavior — see [Response headers](#response-headers).
    - Recommended: enable [Origin Shield](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/origin-shield.html) on the S3 origin, in the region closest to your bucket. The origin-request Lambda runs at the regional edge caches, so Origin Shield collapses requests from all of them into one — fewer Lambda invocations and more cache hits.
 6. **Wait**: Lambda@Edge association changes propagate to edge locations over several minutes (often 15–30+) — longer than a typical CloudFront config change.
@@ -70,12 +74,20 @@ Lambda@Edge doesn't support environment variables, so per-distribution configura
 |---|---|---|
 | `X-Img-Bucket` | S3 bucket holding originals (and where derivatives get written) | Yes |
 | `X-Img-Resized-Prefix` | Key prefix for derivatives | No — defaults to `resized` |
-| `X-Img-Quality` | JPEG/WebP/AVIF save quality (1–100) | No — defaults to `82` |
+| `X-Img-Quality` | JPEG/WebP/AVIF/JPEG XL save quality (1–100; `100` is lossless for JPEG XL, full build only) | No — defaults to `82` |
 | `X-Img-Max-Dimension` | Upper clamp for `w`/`h` (16–8192) | No — defaults to `4096` |
 | `X-Img-Allowed-Sizes` | Comma-separated sizes, e.g. `320,640,960,1280,1920,2560`. Requested `w`/`h` are rounded **up** to the nearest one (or down to the largest) | No — off by default, **recommended in production** |
 | `X-Img-Cache-Control` | `Cache-Control` stored on each derivative | No — defaults to `public, max-age=31536000, immutable` |
 
 See `infra/origin-custom-headers.example.json`.
+
+#### Origin groups (failover)
+
+CloudFront runs an origin-request function once per origin it contacts, so with an [origin group](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/high_availability_origin_failover.html) the function can run twice for one viewer request: once for the primary origin and again for the secondary if the primary returns a failover status. Each run reads the `X-Img-*` headers of the origin it is running for, so:
+
+- **Every origin in the group needs its own `X-Img-*` headers**, with `X-Img-Bucket` set to that origin's bucket. Without it the function passes the request through for that origin and the original is served unresized.
+- **The execution role needs access to every bucket**: read the originals and write under the resized prefix in each one ([`infra/s3-policy.example.json`](infra/s3-policy.example.json) lists one bucket; add a statement per bucket). Each bucket gets its own derivatives.
+- Test the failover path on a staging distribution before relying on it.
 
 ## Architecture
 
@@ -87,7 +99,7 @@ CloudFront (existing cache behavior, existing S3 origin — unchanged)
       │
       ├─ origin-request Lambda@Edge trigger (this project)
       │       │
-      │       ├─ no w/h/f, or ineligible source type → pass through unchanged
+      │       ├─ no w/h/d/f, or ineligible source type → pass through unchanged
       │       ├─ derivative already in S3 → rewrite request URI, done
       │       └─ derivative missing → fetch original, resize/convert with
       │          Pillow, upload derivative to S3, rewrite request URI
@@ -104,17 +116,24 @@ No new CloudFront origin. No new cache behavior/path pattern required (though yo
 |---|---|---|
 | `w` | Target width in px | Optional. May be given alone. |
 | `h` | Target height in px | Optional. May be given alone. |
-| `f` | Output format | One of `webp`, `avif`, `jpeg`, `jpg`, `png`. Optional — omit to keep the source format. |
+| `d` | Width as `WxH` | Shorthand for `w`: `d=500x333` scales to 500px wide and the height follows (the `333` is ignored). `d=400x` is the same, `d=x250` scales to 250px high. Ignored if `w` or `h` is given. |
+| `crop` | Exact-size crop | `crop=true` with both dimensions (`w` and `h`, or `d=WxH`) returns exactly that size. Optional. |
+| `f` | Output format | One of `webp`, `avif`, `jpeg`, `jpg`, `png`, or `jxl` (full build only). Optional — omit to keep the source format. |
 
 - `w` and `h` are independent: give one, both, or neither.
 - Neither given → no resize (still useful for format-only conversion, or as a pure pass-through if `f` is also omitted).
 - Both given → the image is scaled to fit *inside* that box (Pillow's "contain" semantics) — aspect ratio is always preserved, the image is never cropped, and it is never enlarged past its native resolution.
+- `d=WxH` is a width-only shorthand (see the table), so it does **not** fit the image inside a box: a portrait photo requested with `d=500x333` comes out 500px wide and taller than 333px. Use `w` and `h` for a box.
+- `crop=true` is the one case that returns an exact size. The image is scaled to cover the box and cropped from the centre, and it **is enlarged** if the source is smaller than the box. It needs both dimensions — with only one, `crop` is ignored. Exact sizes are not snapped to `X-Img-Allowed-Sizes` (snapping each side would change the box's shape), but they are still clamped to `X-Img-Max-Dimension`, so a crop is not covered by the cap that `X-Img-Allowed-Sizes` puts on the number of derivatives.
 - **Every invalid or out-of-range input results in the original file being served, never an error.** Bad `w`/`h` values are clamped into a sane range (16–4096px by default, see `X-Img-Max-Dimension`) rather than rejected; an unsupported `f` is ignored; a request against a non-image file type is passed straight through without even being looked at.
 - Photos are rotated upright according to their EXIF orientation. EXIF metadata (camera, GPS location) is stripped from derivatives; the embedded colour profile is kept.
 - Originals over 25&nbsp;MB or 50 megapixels are served as-is rather than processed.
 - `bmp` is readable as a source but not requestable via `f=` — `?f=bmp` is ignored like any unsupported format.
+- **JPEG XL and HEIC need the full build.** With `function.zip`, `f=jxl` is ignored and `.jxl`, `.heic` and `.heif` files are passed through untouched.
+- Sources that browsers can't display — HEIC/HEIF (iPhone photos) and TIFF — are converted to JPEG when no `f=` is given. Ask for another format with `f=`, for example `photo.heic?w=800&f=webp`.
+- JPEG XL output is always written as sRGB: unlike the other formats, an embedded colour profile on the source (for example Display P3) is not carried over. Browser support for JPEG XL is still uneven, so only request it where you know the viewer can decode it.
 
-Only certain source file types are eligible for resizing at all — `jpg`, `jpeg`, `png`, `gif`, `webp`, `bmp`. Anything else (including `.svg`, which is vector and shouldn't be raster-resized) is passed straight through, regardless of query params.
+Only certain source file types are eligible for resizing at all — `jpg`, `jpeg`, `jfif`, `png`, `gif`, `webp`, `avif`, `tif`, `tiff` and `bmp`, plus `jxl`, `heic` and `heif` in the full build. Anything else (including `.svg`, which is vector and shouldn't be raster-resized) is passed straight through, regardless of query params.
 
 ## Usage examples
 
@@ -123,7 +142,11 @@ Only certain source file types are eligible for resizing at all — `jpg`, `jpeg
 | `photo.jpg` | untouched |
 | `photo.jpg?w=500` | resized to 500px wide, aspect preserved |
 | `photo.jpg?w=500&h=333` | fit inside 500×333 box |
+| `photo.jpg?d=500x333` | resized to 500px wide, aspect preserved (height follows; same derivative as `w=500`) |
+| `photo.jpg?d=520x400&crop=true` | exactly 520×400, cropped from the centre |
 | `photo.jpg?f=webp` | format converted, no resize |
+| `photo.png?f=jxl` | converted to JPEG XL, no resize (full build) |
+| `photo.heic?w=800` | iPhone photo resized to 800px wide and served as a JPEG (full build) |
 | `photo.jpg?w=99999` | clamped to max (4096px by default) |
 | `logo.svg?w=500` | untouched — SVG never resized |
 
@@ -141,11 +164,11 @@ If you draw these images onto a `<canvas>` or fetch them from JavaScript, also a
 
 ### Limiting derivatives (recommended)
 
-Every distinct `w`/`h`/`f` combination is a separate derivative: it costs one resize and is stored in S3 forever. With only clamping, anyone can request `w=100`, `w=101`, … and create thousands of derivatives per image. Setting `X-Img-Allowed-Sizes` caps that at a handful per image — pick the sizes your `srcset`s actually use.
+Every distinct `w`/`h`/`f`/`crop` combination is a separate derivative: it costs one resize and is stored in S3 forever. With only clamping, anyone can request `w=100`, `w=101`, … and create thousands of derivatives per image. Setting `X-Img-Allowed-Sizes` caps that at a handful per image — pick the sizes your `srcset`s actually use.
 
 ## Cache invalidation
 
-Derivatives are keyed by `(key, w, h, f)` only — not content. Overwriting an original at the same S3 key does **not** invalidate its derivatives; they'll keep being served, forever — and since they're sent with `immutable`, browsers won't re-check them either. If you replace images, use a new key/path rather than overwriting in place.
+Derivatives are keyed by `(key, w, h, f, crop)` only — not content. Overwriting an original at the same S3 key does **not** invalidate its derivatives; they'll keep being served, forever — and since they're sent with `immutable`, browsers won't re-check them either. If you replace images, use a new key/path rather than overwriting in place.
 
 To regenerate every derivative (e.g. after upgrading, to pick up the new `Cache-Control` and encoder settings), delete the `resized/` prefix and invalidate `/*` in CloudFront.
 
@@ -162,6 +185,21 @@ ruff format --check .
 mypy src/
 pytest --cov=src
 ```
+
+The `dev` extra installs the optional JPEG XL and HEIC plugins too, so the whole suite runs. `tests/test_codecs.py` covers the case where they are missing.
+
+## Licensing
+
+This project is MIT-licensed. The default `function.zip` contains Pillow (HPND licence) and the libraries bundled in its wheels, which use permissive licences such as BSD, MIT, zlib and FreeType's. Their licence texts are in `THIRD_PARTY_LICENSES/` inside each zip.
+
+JPEG XL and HEIC come from separate packages with stricter licences, which is why they are optional:
+
+| Format | Package | Licence |
+|---|---|---|
+| JPEG XL | `pillow-jxl-plugin` | GPL-3.0-or-later |
+| HEIC / HEIF | `pillow-heif` binary wheels | Labelled GPLv2: they bundle `libheif` and `libde265` (LGPLv3) and the `x265` encoder (GPLv2) |
+
+`function-full.zip` bundles both, so treat it as GPL-licensed if you copy, modify or redistribute it. HEIC is also based on the HEVC video codec, which can need patent licences in some jurisdictions. This is a summary, not legal advice. If that matters for your use, deploy `function.zip` or check with your own counsel.
 
 ## Contributing
 

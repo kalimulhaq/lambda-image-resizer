@@ -1,11 +1,13 @@
-"""Parsing and validation for the service's query-string interface (?w=&h=&f=)
-and for which source files are eligible to be resized at all.
+"""Parsing and validation for the service's query-string interface
+(?w=&h=&d=&f=&crop=) and for which source files are eligible to be resized at all.
 
 Every function here returns None on invalid/missing input rather than raising —
 callers treat that uniformly as "not requested," never as an error to surface.
 """
 
 from __future__ import annotations
+
+from .codecs import HAS_HEIF, HAS_JXL
 
 MIN_DIMENSION = 16
 # Default cap on w/h; overridable per distribution via X-Img-Max-Dimension,
@@ -15,13 +17,20 @@ MIN_DIMENSION = 16
 DEFAULT_MAX_DIMENSION = 4096
 HARD_MAX_DIMENSION = 8192
 
-# Output formats the service will convert into.
-ALLOWED_OUTPUT_FORMATS = frozenset({"webp", "avif", "jpeg", "jpg", "png"})
+# Output formats the service will convert into. jxl needs its optional plugin.
+ALLOWED_OUTPUT_FORMATS = frozenset(
+    {"webp", "avif", "jpeg", "jpg", "png"} | ({"jxl"} if HAS_JXL else set())
+)
 
 # Source file extensions eligible for resizing. Deliberately excludes svg
 # (vector — resizing it through a raster library is meaningless) and any
-# non-image type.
-ALLOWED_SOURCE_EXTENSIONS = frozenset({"jpg", "jpeg", "png", "gif", "webp", "bmp"})
+# non-image type. jxl and heic/heif need their optional plugins; without one,
+# those files are passed straight through.
+ALLOWED_SOURCE_EXTENSIONS = frozenset(
+    {"jpg", "jpeg", "jfif", "png", "gif", "webp", "avif", "tif", "tiff", "bmp"}
+    | ({"jxl"} if HAS_JXL else set())
+    | ({"heic", "heif"} if HAS_HEIF else set())
+)
 
 
 def parse_dimension(
@@ -55,6 +64,19 @@ def parse_dimension(
     if allowed_sizes:
         return next((size for size in allowed_sizes if size >= clamped), allowed_sizes[-1])
     return clamped
+
+
+def parse_flag(value: str | None) -> bool:
+    """Parse a boolean query flag such as crop=. Only 'true' and '1' enable it."""
+    return value is not None and value.strip().lower() in ("true", "1")
+
+
+def split_dimensions(value: str) -> tuple[str, str]:
+    """Split a d=WxH value into its raw (width, height) parts. Either may be
+    empty ('400x', 'x250'); a value with no 'x' is all width.
+    """
+    width, _, height = value.lower().partition("x")
+    return width, height
 
 
 def parse_format(value: str | None) -> str | None:

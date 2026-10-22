@@ -1,8 +1,10 @@
 from lambda_image_resizer.params import (
     is_resizable_source,
     parse_dimension,
+    parse_flag,
     parse_format,
     source_extension,
+    split_dimensions,
 )
 
 
@@ -37,7 +39,7 @@ class TestParseDimension:
 
 class TestParseFormat:
     def test_valid_formats(self):
-        for fmt in ("webp", "avif", "jpeg", "jpg", "png"):
+        for fmt in ("webp", "avif", "jxl", "jpeg", "jpg", "png"):
             assert parse_format(fmt) == fmt
 
     def test_case_insensitive(self):
@@ -53,6 +55,34 @@ class TestParseFormat:
 
     def test_empty_string_is_none(self):
         assert parse_format("") is None
+
+
+class TestParseFlag:
+    def test_true_and_one_enable_the_flag(self):
+        assert parse_flag("true") is True
+        assert parse_flag("TRUE") is True
+        assert parse_flag("1") is True
+
+    def test_anything_else_is_off(self):
+        for value in (None, "", "false", "0", "yes", "tru"):
+            assert parse_flag(value) is False, value
+
+
+class TestSplitDimensions:
+    def test_width_and_height(self):
+        assert split_dimensions("500x333") == ("500", "333")
+
+    def test_width_only(self):
+        assert split_dimensions("400x") == ("400", "")
+
+    def test_height_only(self):
+        assert split_dimensions("X250") == ("", "250")
+
+    def test_uppercase_separator(self):
+        assert split_dimensions("500X333") == ("500", "333")
+
+    def test_no_separator_is_all_width(self):
+        assert split_dimensions("500") == ("500", "")
 
 
 class TestSourceExtension:
@@ -74,7 +104,10 @@ class TestSourceExtension:
 
 class TestIsResizableSource:
     def test_allowed_extensions(self):
-        for ext in ("jpg", "jpeg", "png", "gif", "webp", "bmp"):
+        for ext in (
+            *("jpg", "jpeg", "jfif", "png", "gif", "webp", "avif", "bmp"),
+            *("tif", "tiff", "heic", "heif", "jxl"),
+        ):
             assert is_resizable_source(f"uploads/x.{ext}") is True
 
     def test_svg_is_excluded(self):

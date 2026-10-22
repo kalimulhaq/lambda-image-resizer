@@ -1,8 +1,9 @@
 """Resize and format-conversion logic, built on Pillow.
 
-The resize behavior is deliberately narrow: fit the image inside the
+The default resize is deliberately narrow: fit the image inside the
 requested box, preserving aspect ratio, never cropping, never distorting,
-and never upscaling past the source resolution.
+and never upscaling past the source resolution. The one opt-in exception is
+crop=true (fill_box), which returns exactly the requested size.
 """
 
 from __future__ import annotations
@@ -11,9 +12,19 @@ from io import BytesIO
 
 from PIL import ExifTags, Image, ImageOps
 
+from .codecs import HAS_HEIF, HAS_JXL
+
 # Only these decoders ever see untrusted bytes — Pillow would otherwise try
 # every plugin it has, based on the file's content rather than its extension.
-_ALLOWED_DECODERS = ("JPEG", "PNG", "GIF", "WEBP", "BMP")
+_ALLOWED_DECODERS = (
+    ("JPEG", "PNG", "GIF", "WEBP", "AVIF", "TIFF", "BMP")
+    + (("JXL",) if HAS_JXL else ())
+    + (("HEIF",) if HAS_HEIF else ())
+)
+
+# Source formats browsers can't display. With no output format requested they
+# are converted to JPEG instead of being re-saved in their own format.
+_BROWSER_UNSUPPORTED_SOURCES = frozenset({"HEIF", "TIFF"})
 
 # Reject sources above this pixel count before decoding them (a 50MP RGBA
 # image is ~200MB decoded). Pillow's own guard only warns until 2x its
@@ -21,7 +32,7 @@ _ALLOWED_DECODERS = ("JPEG", "PNG", "GIF", "WEBP", "BMP")
 MAX_SOURCE_PIXELS = 50_000_000
 
 # Formats whose Pillow plugin accepts a `quality` kwarg.
-_QUALITY_AWARE_FORMATS = frozenset({"jpeg", "webp", "avif"})
+_QUALITY_AWARE_FORMATS = frozenset({"jpeg", "webp", "avif", "jxl"})
 
 # Formats without alpha-channel support — an RGBA/P-mode source must be
 # flattened onto an opaque background before saving as one of these.
@@ -61,6 +72,34 @@ def fit_size(size: tuple[int, int], target_w: int | None, target_h: int | None) 
     return (max(1, round(orig_w * scale)), max(1, round(orig_h * scale)))
 
 
+def cover_size(size: tuple[int, int], target_w: int, target_h: int) -> tuple[int, int]:
+    """Return the size `size` becomes when scaled, up or down, to just cover
+    (target_w, target_h) while preserving aspect ratio.
+    """
+    orig_w, orig_h = size
+    scale = max(target_w / orig_w, target_h / orig_h)
+    return (max(1, round(orig_w * scale)), max(1, round(orig_h * scale)))
+
+
+def fill_box(image: Image.Image, target_w: int, target_h: int) -> Image.Image:
+    """Return `image` scaled to cover (target_w, target_h) and cropped from
+    the centre to exactly that size, preserving aspect ratio.
+
+    Unlike fit_inside_no_upscale this enlarges small sources: a caller asks
+    for crop=true when it needs the exact dimensions.
+    """
+    orig_w, orig_h = image.size
+    scale = max(target_w / orig_w, target_h / orig_h)
+    window_w, window_h = target_w / scale, target_h / scale
+    # Pillow rejects a box outside the image by even 1e-15, which float
+    # rounding can produce, hence the clamps.
+    left = max(0.0, (orig_w - window_w) / 2)
+    top = max(0.0, (orig_h - window_h) / 2)
+    # One resample straight from the centred source window to the target size.
+    box = (left, top, min(float(orig_w), left + window_w), min(float(orig_h), top + window_h))
+    return image.resize((target_w, target_h), Image.Resampling.LANCZOS, box=box, reducing_gap=3.0)
+
+
 def fit_inside_no_upscale(
     image: Image.Image, target_w: int | None, target_h: int | None
 ) -> Image.Image:
@@ -78,13 +117,25 @@ def fit_inside_no_upscale(
     return image.resize(new_size, Image.Resampling.LANCZOS, reducing_gap=3.0)
 
 
+def _draft_size(
+    size: tuple[int, int], target_w: int | None, target_h: int | None, crop: bool
+) -> tuple[int, int]:
+    """The smallest size a draft decode may leave: the fitted size, or the
+    covering size when the result will be cropped to fill the box.
+    """
+    if crop and target_w is not None and target_h is not None:
+        return cover_size(size, target_w, target_h)
+    return fit_size(size, target_w, target_h)
+
+
 def load_image(
-    data: bytes, target_w: int | None, target_h: int | None
+    data: bytes, target_w: int | None, target_h: int | None, crop: bool = False
 ) -> tuple[Image.Image, str | None]:
     """Decode untrusted `data` into an upright image ready for resizing.
 
-    Returns (image, source_format). Raises ImageTooLarge, or Pillow's
-    UnidentifiedImageError for anything that isn't an allowed format.
+    `crop` says the result will be cropped to fill the box rather than fitted
+    inside it. Returns (image, source_format). Raises ImageTooLarge, or
+    Pillow's UnidentifiedImageError for anything that isn't an allowed format.
     """
     image: Image.Image = Image.open(BytesIO(data), formats=_ALLOWED_DECODERS)
     source_format = image.format
@@ -100,9 +151,9 @@ def load_image(
         # at least the target size — far less work than a full decode. The
         # target is in upright space, so swap it for rotated sources.
         if orientation in _TRANSPOSING_ORIENTATIONS:
-            raw_box = fit_size((height, width), target_w, target_h)[::-1]
+            raw_box = _draft_size((height, width), target_w, target_h, crop)[::-1]
         else:
-            raw_box = fit_size((width, height), target_w, target_h)
+            raw_box = _draft_size((width, height), target_w, target_h, crop)
         image.draft(image.mode, (raw_box[0], raw_box[1]))
 
     if orientation != 1:
@@ -122,6 +173,10 @@ def _normalize_mode(image: Image.Image) -> Image.Image:
     """
     if image.mode in _NATIVE_MODES:
         return image
+    if image.mode.startswith("I;16"):
+        # convert() clamps 16-bit greyscale values above 255 to white, so
+        # scale down to 8 bits first.
+        return image.point(lambda value: value / 256).convert("L")
     if image.mode == "CMYK":
         # The embedded profile describes CMYK, not the RGB we're producing.
         converted = image.convert("RGB")
@@ -147,6 +202,8 @@ def convert_and_save(
     image has been through operations that drop `.format`.
     """
     pillow_format = _pillow_format_name(fmt) if fmt else (source_format or image.format or "PNG")
+    if not fmt and pillow_format in _BROWSER_UNSUPPORTED_SOURCES:
+        pillow_format = "JPEG"
     normalized_fmt = pillow_format.lower()
     normalized_fmt = "jpeg" if normalized_fmt == "jpg" else normalized_fmt
 
@@ -168,6 +225,11 @@ def convert_and_save(
         save_kwargs.update(optimize=True, progressive=True)
     elif normalized_fmt == "webp":
         save_kwargs["method"] = 5
+    elif normalized_fmt == "jxl":
+        # The JXL plugin copies EXIF from the image unless told otherwise, can't
+        # encode quality 100 unless it is lossless, and re-encodes the file on
+        # disk instead of the pixels for a file-backed JPEG.
+        save_kwargs.update(exif=b"", lossless=quality >= 100, lossless_jpeg=False)
 
     buffer = BytesIO()
     image.save(buffer, format=pillow_format, **save_kwargs)

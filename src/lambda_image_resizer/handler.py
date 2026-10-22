@@ -18,8 +18,14 @@ from PIL import UnidentifiedImageError
 from . import storage
 from .config import ConfigError, OriginConfig
 from .keys import derivative_key, is_derivative_key
-from .params import is_resizable_source, parse_dimension, parse_format
-from .resize import ImageTooLarge, convert_and_save, fit_inside_no_upscale, load_image
+from .params import (
+    is_resizable_source,
+    parse_dimension,
+    parse_flag,
+    parse_format,
+    split_dimensions,
+)
+from .resize import ImageTooLarge, convert_and_save, fill_box, fit_inside_no_upscale, load_image
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -30,6 +36,7 @@ MAX_SOURCE_BYTES = 25 * 1024 * 1024
 _CONTENT_TYPES = {
     "webp": "image/webp",
     "avif": "image/avif",
+    "jxl": "image/jxl",
     "jpeg": "image/jpeg",
     "jpg": "image/jpeg",
     "png": "image/png",
@@ -68,19 +75,14 @@ def _process(request: dict[str, Any]) -> dict[str, Any]:
         return request
 
     query_params = _parse_querystring(request.get("querystring", ""))
-    width_raw, height_raw = query_params.get("w"), query_params.get("h")
-    if width_raw is None and height_raw is None and "d" in query_params:
-        # Legacy `d=WxH` form; explicit w/h take precedence.
-        width_raw, _, height_raw = query_params["d"].lower().partition("x")
-    width = parse_dimension(width_raw, config.max_dimension, config.allowed_sizes)
-    height = parse_dimension(height_raw, config.max_dimension, config.allowed_sizes)
+    width, height, crop = _requested_size(query_params, config)
     fmt = parse_format(query_params.get("f"))
 
     if width is None and height is None and fmt is None:
         return request
 
     region = s3_origin.get("region")
-    dest_key = derivative_key(original_key, config.resized_prefix, width, height, fmt)
+    dest_key = derivative_key(original_key, config.resized_prefix, width, height, fmt, crop)
 
     if storage.derivative_exists(config.bucket, dest_key, region):
         return _rewrite(request, dest_key)
@@ -89,7 +91,7 @@ def _process(request: dict[str, Any]) -> dict[str, Any]:
         original_bytes, _content_type = storage.get_original(
             config.bucket, original_key, MAX_SOURCE_BYTES, region
         )
-        image, source_format = load_image(original_bytes, width, height)
+        image, source_format = load_image(original_bytes, width, height, crop)
     except UnidentifiedImageError:
         logger.warning(
             "lambda-image-resizer: unreadable image at %s, passing through", original_key
@@ -105,7 +107,11 @@ def _process(request: dict[str, Any]) -> dict[str, Any]:
         return request
 
     try:
-        resized = fit_inside_no_upscale(image, width, height)
+        if crop:
+            assert width is not None and height is not None  # crop implies both
+            resized = fill_box(image, width, height)
+        else:
+            resized = fit_inside_no_upscale(image, width, height)
         out_bytes, out_fmt = convert_and_save(resized, fmt, config.quality, source_format)
         content_type = _CONTENT_TYPES.get(out_fmt, "application/octet-stream")
         storage.put_derivative(
@@ -118,6 +124,35 @@ def _process(request: dict[str, Any]) -> dict[str, Any]:
         return request
 
     return _rewrite(request, dest_key)
+
+
+def _requested_size(
+    query_params: dict[str, str], config: OriginConfig
+) -> tuple[int | None, int | None, bool]:
+    """Resolve w/h/d/crop into (width, height, crop).
+
+    Explicit w/h win over d. `d=WxH` keeps only the width (the height follows
+    the aspect ratio), unless crop=true, which needs both. Crop also needs
+    both dimensions and keeps them exact, so it skips allowed-sizes snapping
+    (which would change the box's shape) but is still clamped.
+    """
+    from_d = False
+    width_raw, height_raw = query_params.get("w"), query_params.get("h")
+    if width_raw is None and height_raw is None and "d" in query_params:
+        width_raw, height_raw = split_dimensions(query_params["d"])
+        from_d = True
+    width = parse_dimension(width_raw, config.max_dimension, config.allowed_sizes)
+    height = parse_dimension(height_raw, config.max_dimension, config.allowed_sizes)
+
+    if parse_flag(query_params.get("crop")) and width is not None and height is not None:
+        return (
+            parse_dimension(width_raw, config.max_dimension),
+            parse_dimension(height_raw, config.max_dimension),
+            True,
+        )
+    if from_d and width is not None:
+        height = None
+    return width, height, False
 
 
 def _rewrite(request: dict[str, Any], dest_key: str) -> dict[str, Any]:

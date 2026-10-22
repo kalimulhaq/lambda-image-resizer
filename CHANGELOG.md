@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+- `crop=true`: with both dimensions (`w` and `h`, or `d=WxH`) the image is scaled to cover the box and cropped from the centre to exactly that size. It enlarges sources smaller than the box. Crops get their own derivative key (`w520h400c`), so existing derivatives are unaffected.
+- JPEG XL (`f=jxl` output and `.jxl` sources) and HEIC/HEIF sources (iPhone photos), as **optional** codecs. They come from `pillow-jxl-plugin` and `pillow-heif`, which are GPL-licensed, so they are only in the new `function-full.zip` (or `pip install ".[jxl,heic]"`). Without them `f=jxl` is ignored and those files are passed through. `X-Img-Quality` applies to JPEG XL, and `100` means lossless.
+- TIFF (`.tif`, `.tiff`), AVIF and `.jfif` files are now accepted as sources (AVIF was previously output-only). Sources browsers can't display (HEIC, TIFF) are converted to JPEG when no `f=` is given.
+- Releases publish `function-full.zip` (and its `.sha256`) next to `function.zip`. `scripts/build.sh --full` builds it, and `scripts/deploy.sh` takes a `ZIP_FILE` override.
+- Both zips now carry the licence texts of the packages bundled in them, under `THIRD_PARTY_LICENSES/`.
+- README documentation for the `d=` parameter, for using the function with a CloudFront origin group, and a Licensing section.
+
+### Changed
+- `d=WxH` is now a documented, permanent parameter and is **width-only**: `d=500x333` scales to 500px wide and the height follows, instead of fitting inside the 500×333 box as in 0.2.0. `d=x250` still scales by height, and explicit `w`/`h` still win over `d`. `d=500x333` now shares the `w500` derivative with `?w=500`; derivatives written by 0.2.0 under `w500h333` for `d=` requests are no longer used.
+- `crop=true` skips `X-Img-Allowed-Sizes` snapping, since snapping each side would change the box's shape. Crop sizes are still clamped to `X-Img-Max-Dimension`.
+- `infra/cache-policy.example.json` now forwards `d` and `crop` as well as `w`, `h` and `f`.
+- Pillow is capped below 13 (the major version the tests run on), and `scripts/build.sh` now fetches `manylinux_2_28` wheels, so the zip moves from Pillow 12.2.0 to 12.3.0.
+
+### Fixed
+- 16-bit greyscale PNG and TIFF images no longer turn pure white; they are scaled down to 8 bits.
+
+### Security
+- The AVIF and TIFF decoders now also see untrusted input, in addition to JPEG, PNG, GIF, WebP and BMP (and JPEG XL and HEIF in the full build). The 25 MB and 50 megapixel limits still apply before decoding.
+- JPEG XL output never carries over EXIF metadata (the plugin would otherwise copy it from the source), and is always encoded from the resized pixels rather than from the original file.
+
+### Upgrading
+- **Your cache policy must forward the `d` and `crop` query strings** (see `infra/cache-policy.example.json`). Without them, requests that differ only in `d` or `crop` share one cache entry and can be served the wrong variant.
+- Callers that relied on 0.2.0's box-fitting `d=WxH` should switch to `w=` and `h=`.
+- To use JPEG XL or HEIC, deploy `function-full.zip` and read the Licensing section of the README first. JPEG XL output does not carry an embedded colour profile over from the source; it is written as sRGB.
+
 ## [0.2.0] - 2026-09-30
 
 ### Added

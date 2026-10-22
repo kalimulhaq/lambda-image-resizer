@@ -265,19 +265,30 @@ class TestHandlerHardening:
         assert result["uri"] == "/resized/orig/webp/uploads/pro-01.png"
 
 
-class TestHandlerLegacyDimensionParam:
-    def test_d_param_maps_to_width_and_height(self, s3_bucket):
+class TestHandlerDParam:
+    def test_d_is_width_only(self, s3_bucket):
+        # A 1000x2000 portrait in a 500x333 box would fit to 167x333; d= keeps
+        # the width and lets the height follow.
+        s3_bucket.put_object(
+            Bucket=BUCKET, Key="uploads/pro-01.png", Body=make_image_bytes(1000, 2000)
+        )
+        result = handler(make_event("/uploads/pro-01.png", "d=500x333"), None)
+        assert result["uri"] == "/resized/w500/orig/uploads/pro-01.png"
+        derivative = s3_bucket.get_object(Bucket=BUCKET, Key="resized/w500/orig/uploads/pro-01.png")
+        assert Image.open(BytesIO(derivative["Body"].read())).size == (500, 1000)
+
+    def test_d_combines_with_format(self, s3_bucket):
         s3_bucket.put_object(
             Bucket=BUCKET, Key="uploads/pro-01.jpg", Body=make_image_bytes(2000, 1000, "JPEG")
         )
         result = handler(make_event("/uploads/pro-01.jpg", "f=webp&d=1000x666"), None)
-        assert result["uri"] == "/resized/w1000h666/webp/uploads/pro-01.jpg"
+        assert result["uri"] == "/resized/w1000/webp/uploads/pro-01.jpg"
         derivative = s3_bucket.get_object(
-            Bucket=BUCKET, Key="resized/w1000h666/webp/uploads/pro-01.jpg"
+            Bucket=BUCKET, Key="resized/w1000/webp/uploads/pro-01.jpg"
         )
         assert Image.open(BytesIO(derivative["Body"].read())).size == (1000, 500)
 
-    def test_d_param_width_or_height_only(self, s3_bucket):
+    def test_d_width_or_height_only(self, s3_bucket):
         s3_bucket.put_object(Bucket=BUCKET, Key="uploads/pro-01.png", Body=make_image_bytes())
         assert handler(make_event("/uploads/pro-01.png", "d=400x"), None)["uri"] == (
             "/resized/w400/orig/uploads/pro-01.png"
@@ -295,3 +306,127 @@ class TestHandlerLegacyDimensionParam:
         s3_bucket.put_object(Bucket=BUCKET, Key="uploads/pro-01.png", Body=make_image_bytes())
         result = handler(make_event("/uploads/pro-01.png", "d=bogus"), None)
         assert result["uri"] == "/uploads/pro-01.png"
+
+
+class TestHandlerCrop:
+    def _crop(self, s3_bucket, querystring, source=(1000, 1000), extra_headers=None):
+        s3_bucket.put_object(
+            Bucket=BUCKET, Key="uploads/pro-01.png", Body=make_image_bytes(*source)
+        )
+        result = handler(make_event("/uploads/pro-01.png", querystring, extra_headers), None)
+        derivative = s3_bucket.get_object(Bucket=BUCKET, Key=result["uri"].lstrip("/"))
+        return result["uri"], Image.open(BytesIO(derivative["Body"].read())).size
+
+    def test_crop_with_d_gives_the_exact_size(self, s3_bucket):
+        uri, size = self._crop(s3_bucket, "d=520x400&crop=true")
+        assert uri == "/resized/w520h400c/orig/uploads/pro-01.png"
+        assert size == (520, 400)
+
+    def test_crop_with_w_and_h_gives_the_exact_size(self, s3_bucket):
+        uri, size = self._crop(s3_bucket, "w=520&h=400&crop=true")
+        assert uri == "/resized/w520h400c/orig/uploads/pro-01.png"
+        assert size == (520, 400)
+
+    def test_small_source_still_gets_the_exact_size(self, s3_bucket):
+        _, size = self._crop(s3_bucket, "d=520x400&crop=true", source=(200, 100))
+        assert size == (520, 400)
+
+    def test_crop_needs_both_dimensions(self, s3_bucket):
+        s3_bucket.put_object(Bucket=BUCKET, Key="uploads/pro-01.png", Body=make_image_bytes())
+        assert handler(make_event("/uploads/pro-01.png", "w=400&crop=true"), None)["uri"] == (
+            "/resized/w400/orig/uploads/pro-01.png"
+        )
+        assert handler(make_event("/uploads/pro-01.png", "d=400x&crop=true"), None)["uri"] == (
+            "/resized/w400/orig/uploads/pro-01.png"
+        )
+
+    def test_crop_false_is_ignored(self, s3_bucket):
+        s3_bucket.put_object(Bucket=BUCKET, Key="uploads/pro-01.png", Body=make_image_bytes())
+        result = handler(make_event("/uploads/pro-01.png", "d=520x400&crop=false"), None)
+        assert result["uri"] == "/resized/w520/orig/uploads/pro-01.png"
+
+    def test_crop_keeps_the_exact_size_instead_of_snapping_to_allowed_sizes(self, s3_bucket):
+        uri, size = self._crop(
+            s3_bucket,
+            "d=520x400&crop=true",
+            extra_headers={"X-Img-Allowed-Sizes": "320,640"},
+        )
+        assert uri == "/resized/w520h400c/orig/uploads/pro-01.png"
+        assert size == (520, 400)
+
+    def test_crop_does_not_let_one_dimension_dodge_allowed_sizes(self, s3_bucket):
+        s3_bucket.put_object(Bucket=BUCKET, Key="uploads/pro-01.png", Body=make_image_bytes())
+        event = make_event("/uploads/pro-01.png", "w=101&crop=true", {"X-Img-Allowed-Sizes": "320"})
+        assert handler(event, None)["uri"] == "/resized/w320/orig/uploads/pro-01.png"
+
+    def test_crop_dimensions_are_still_clamped(self, s3_bucket):
+        uri, size = self._crop(
+            s3_bucket, "w=999999&h=400&crop=true", extra_headers={"X-Img-Max-Dimension": "600"}
+        )
+        assert uri == "/resized/w600h400c/orig/uploads/pro-01.png"
+        assert size == (600, 400)
+
+
+class TestHandlerFormats:
+    def _derivative(self, s3_bucket, key, body, querystring):
+        s3_bucket.put_object(Bucket=BUCKET, Key=key, Body=body)
+        result = handler(make_event("/" + key, querystring), None)
+        derivative = s3_bucket.get_object(Bucket=BUCKET, Key=result["uri"].lstrip("/"))
+        image = Image.open(BytesIO(derivative["Body"].read()))
+        return result["uri"], derivative["ContentType"], image
+
+    def test_jxl_source_is_resized_and_stays_jxl(self, s3_bucket):
+        uri, content_type, image = self._derivative(
+            s3_bucket, "uploads/pro-01.jxl", make_image_bytes(400, 200, "JXL"), "w=200"
+        )
+        assert uri == "/resized/w200/orig/uploads/pro-01.jxl"
+        assert content_type == "image/jxl"
+        assert (image.format, image.size) == ("JXL", (200, 100))
+
+    def test_f_jxl_converts_a_png(self, s3_bucket):
+        uri, content_type, image = self._derivative(
+            s3_bucket, "uploads/pro-01.png", make_image_bytes(), "f=jxl"
+        )
+        assert uri == "/resized/orig/jxl/uploads/pro-01.png"
+        assert content_type == "image/jxl"
+        assert image.format == "JXL"
+
+    def test_avif_source_is_resized_and_stays_avif(self, s3_bucket):
+        uri, content_type, image = self._derivative(
+            s3_bucket, "uploads/pro-01.avif", make_image_bytes(400, 200, "AVIF"), "w=200"
+        )
+        assert uri == "/resized/w200/orig/uploads/pro-01.avif"
+        assert content_type == "image/avif"
+        assert (image.format, image.size) == ("AVIF", (200, 100))
+
+    def test_jfif_source_is_resized_as_a_jpeg(self, s3_bucket):
+        uri, content_type, image = self._derivative(
+            s3_bucket, "uploads/photo.jfif", make_image_bytes(400, 200, "JPEG"), "w=200"
+        )
+        assert uri == "/resized/w200/orig/uploads/photo.jfif"
+        assert content_type == "image/jpeg"
+        assert (image.format, image.size) == ("JPEG", (200, 100))
+
+    def test_heic_source_is_converted_to_a_jpeg(self, s3_bucket):
+        uri, content_type, image = self._derivative(
+            s3_bucket, "uploads/photo.heic", make_image_bytes(400, 200, "HEIF"), "w=200"
+        )
+        assert uri == "/resized/w200/orig/uploads/photo.heic"
+        assert content_type == "image/jpeg"
+        assert (image.format, image.size) == ("JPEG", (200, 100))
+
+    def test_tiff_source_is_converted_to_a_jpeg(self, s3_bucket):
+        uri, content_type, image = self._derivative(
+            s3_bucket, "uploads/scan.tif", make_image_bytes(400, 200, "TIFF"), "w=200"
+        )
+        assert uri == "/resized/w200/orig/uploads/scan.tif"
+        assert content_type == "image/jpeg"
+        assert (image.format, image.size) == ("JPEG", (200, 100))
+
+    def test_tiff_source_honours_a_requested_format(self, s3_bucket):
+        uri, content_type, image = self._derivative(
+            s3_bucket, "uploads/scan.tiff", make_image_bytes(400, 200, "TIFF"), "w=200&f=webp"
+        )
+        assert uri == "/resized/w200/webp/uploads/scan.tiff"
+        assert content_type == "image/webp"
+        assert image.format == "WEBP"
