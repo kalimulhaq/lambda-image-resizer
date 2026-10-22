@@ -11,6 +11,8 @@
 #   MEMORY_SIZE     - optional, MB, defaults to 1024 (Lambda CPU scales with
 #                      memory, so this roughly halves resize time vs 512)
 #   TIMEOUT         - optional, seconds, defaults to 30 (the origin-request max)
+#   ZIP_FILE        - optional, defaults to function.zip (use function-full.zip,
+#                      built with `scripts/build.sh --full`, for JPEG XL and HEIC)
 #
 # Usage:
 #   ./scripts/build.sh
@@ -23,8 +25,10 @@ cd "$(dirname "$0")/.."
 : "${FUNCTION_NAME:?Set FUNCTION_NAME}"
 : "${ROLE_ARN:?Set ROLE_ARN}"
 
-if [ ! -f function.zip ]; then
-  echo "function.zip not found — run scripts/build.sh first." >&2
+ZIP_FILE="${ZIP_FILE:-function.zip}"
+
+if [ ! -f "$ZIP_FILE" ]; then
+  echo "$ZIP_FILE not found — run scripts/build.sh first." >&2
   exit 1
 fi
 
@@ -38,7 +42,7 @@ if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$REGION" >
   echo "Updating existing function $FUNCTION_NAME..."
   aws lambda update-function-code \
     --function-name "$FUNCTION_NAME" \
-    --zip-file fileb://function.zip \
+    --zip-file "fileb://$ZIP_FILE" \
     --region "$REGION" >/dev/null
   aws lambda wait function-updated-v2 --function-name "$FUNCTION_NAME" --region "$REGION"
   aws lambda update-function-configuration \
@@ -54,7 +58,7 @@ else
     --runtime python3.13 \
     --handler lambda_image_resizer.handler.handler \
     --role "$ROLE_ARN" \
-    --zip-file fileb://function.zip \
+    --zip-file "fileb://$ZIP_FILE" \
     --timeout "$TIMEOUT" \
     --memory-size "$MEMORY_SIZE" \
     --region "$REGION" >/dev/null

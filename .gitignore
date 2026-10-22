@@ -12,6 +12,7 @@ dist/
 # packaging artifacts
 package/
 function.zip
+function-full.zip
 
 # local venvs
 .venv/

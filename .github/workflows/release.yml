@@ -47,7 +47,16 @@ jobs:
               sys.exit(f"::error::No '## [{version}]' section in CHANGELOG.md")
           if "unreleased" in match["date"].lower():
               sys.exit(f"::error::CHANGELOG.md section for {version} is still marked Unreleased")
-          open("RELEASE_NOTES.md", "w", encoding="utf-8").write(match["body"].strip() + "\n")
+          downloads = """
+
+          ### Downloads
+
+          - `function.zip`: JPEG, PNG, GIF, WebP, AVIF, TIFF and BMP, with permissive licences only.
+          - `function-full.zip`: everything above plus JPEG XL and HEIC. It bundles GPL-licensed
+            components (see `THIRD_PARTY_LICENSES/` inside the zip and "Licensing" in the README).
+          """
+          notes = match["body"].strip() + "\n" + downloads
+          open("RELEASE_NOTES.md", "w", encoding="utf-8").write(notes)
           EOF
 
       - name: Lint and type check
@@ -59,11 +68,15 @@ jobs:
       - name: Test before packaging
         run: pytest
 
-      - name: Build deployment package
-        run: ./scripts/build.sh
+      - name: Build deployment packages
+        run: |
+          ./scripts/build.sh
+          ./scripts/build.sh --full
 
-      - name: Checksum
-        run: sha256sum function.zip > function.zip.sha256
+      - name: Checksums
+        run: |
+          sha256sum function.zip > function.zip.sha256
+          sha256sum function-full.zip > function-full.zip.sha256
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -73,3 +86,5 @@ jobs:
           files: |
             function.zip
             function.zip.sha256
+            function-full.zip
+            function-full.zip.sha256
