@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [0.3.0] - 2026-10-22
 
 ### Added
 - `crop=true`: with both dimensions (`w` and `h`, or `d=WxH`) the image is scaled to cover the box and cropped from the centre to exactly that size. It enlarges sources smaller than the box. Crops get their own derivative key (`w520h400c`), so existing derivatives are unaffected.
